@@ -1,0 +1,1 @@
+# code for reading transaction categorization logic from YAML file and construct a spark sql query to categorize the transaction
