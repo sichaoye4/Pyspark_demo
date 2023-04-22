@@ -1,11 +1,12 @@
-'''code for preprocess the demographics, account & transaction table from Czech Bank Dataset'''
+'''code for preprocess the loan, account & transaction table from Czech Bank Dataset'''
 from pyspark.sql import SparkSession, DataFrame, Window
-from pyspark.sql.functions import lit, col, regexp_replace, regexp_extract, date_format, to_date, when
+from pyspark.sql.functions import lit, col, date_format, to_date, when, row_number, add_months, expr
+from pyspark.sql.types import StringType, IntegerType
 
 # the preprocessing function for transaction table
 def preprocess_transaction(df):
     # format the date column
-    df = df.withColumn("date", date_format(to_date(col("date"), "yyMMdd"), "yyyy-MM-dd"))
+    df = df.withColumn("date", date_format(to_date(col("date").cast(StringType()), "yyMMdd"), "yyyy-MM-dd"))
 
     # translate the type column
     df = df.withColumn("type", when(col("type") == "PRIJEM", "credit").otherwise("debit"))
@@ -25,12 +26,30 @@ def preprocess_transaction(df):
                                     .when(col("k_symbol") == "SIPO", "Household Payment")\
                                     .when(col("k_symbol") == "DUCHOD", "Old-age Pension")\
                                     .when(col("k_symbol") == "UVER", "Loan Payment"))
+    
+    # create a month_id column
+    df = df.withColumn("month_id", date_format(col("date"), "yyyyMM").cast(IntegerType()))
     return df
 
 # the preprocessing function of account table
 def preprocess_account(df):
-    # translate the Frequency column
-    df = df.withColumn("frequency", when(col("frequency") == "POPLATEK MESICNE", "Monthly Issuance")\
-                                    .when(col("frequency") == "POPLATEK TYDNE", "Weekly Issuance")\
-                                    .otherwise("ISSUANCE AFTER TRANSACTION"))
+    # dedup account by account_id using window function, and keep the record with the latest date
+    window = Window.partitionBy("account_id").orderBy(col("type").desc())
+    df = df.withColumn("rn", row_number().over(window)).where(col("rn") == 1).select("account_id", "client_id")
+    return df
+
+# the preprocessing function of loan table
+def preprocess_loan(df):
+    # format the date column
+    df = df.withColumn("date", to_date(col("date").cast(StringType()), "yyMMdd"))
+
+    # create a month_id column
+    df = df.withColumn("month_id", date_format(col("date"), "yyyyMM").cast(IntegerType()))
+
+    # create a due date column by adding duration as month to the date column
+    df = df.withColumn("duration", col("duration").cast(IntegerType()))\
+            .withColumn("due_date", date_format(expr("add_months(date, duration)"), "yyyy-MM-dd"))
+    
+    # format date into yyyy-MM-dd string
+    df = df.withColumn("date", date_format(col("date"), "yyyy-MM-dd"))
     return df
